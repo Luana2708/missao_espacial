@@ -1,0 +1,1824 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fase 1 – Missão Espacial</title>
+  <style>
+:root {
+  color-scheme: dark;
+  font-family: "Courier New", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 20% 20%, #171065 0, transparent 28%),
+    radial-gradient(circle at 80% 15%, #2f075f 0, transparent 24%),
+    linear-gradient(#04051a, #090322 60%, #02010d);
+  color: #fff;
+}
+
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  overflow-x: hidden;
+}
+
+.game-shell {
+  width: min(96vw, 1420px);
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+}
+
+.game-wrap {
+  position: relative;
+  width: min(96vw, 1420px);
+}
+
+canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  display: block;
+  background: #05051d;
+  border: 4px solid #24bfff;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 3px #07336d,
+    0 0 28px rgba(0, 194, 255, 0.45),
+    0 20px 80px rgba(0, 0, 0, 0.65);
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.touch-controls {
+  position: absolute;
+  inset: auto 18px 18px 18px;
+  display: none;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+}
+
+.touch-btn {
+  pointer-events: auto;
+  width: 68px;
+  height: 68px;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  background: rgba(6, 18, 38, 0.52);
+  color: #dffaff;
+  font: 700 28px "Courier New", monospace;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(2px);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.touch-btn.jump {
+  width: 82px;
+  height: 82px;
+  margin-left: auto;
+}
+
+.touch-btn.active {
+  background: rgba(51, 202, 255, 0.45);
+  border-color: #7ee7ff;
+  transform: scale(0.98);
+}
+
+.help {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  color: #bfefff;
+  font-size: clamp(11px, 1.2vw, 15px);
+  text-shadow: 0 1px 0 #000;
+}
+
+.help b { color: #ffd84d; }
+
+@media (max-width: 700px) {
+  body { padding: 6px; }
+  .game-shell { width: 100vw; }
+  .game-wrap { width: 100vw; }
+  canvas { border-radius: 0; border-left: 0; border-right: 0; }
+  .help { padding: 0 8px 8px; gap: 8px 14px; }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .touch-controls { display: flex; }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .touch-controls { display: none; }
+}
+
+  </style>
+</head>
+<body>
+  <main class="game-shell">
+    <div class="game-wrap">
+      <canvas id="game" width="960" height="540" aria-label="Jogo de plataforma Missão Espacial"></canvas>
+      <div class="touch-controls" aria-label="Controles de toque">
+        <button class="touch-btn" data-control="left" aria-label="Mover para a esquerda">◀</button>
+        <button class="touch-btn jump" data-control="jump" aria-label="Pular">▲</button>
+        <button class="touch-btn" data-control="right" aria-label="Mover para a direita">▶</button>
+      </div>
+    </div>
+    <div class="help">
+      <span><b>A / ←</b> esquerda</span>
+      <span><b>D / →</b> direita</span>
+      <span><b>W / ↑ / Espaço</b> pular</span>
+      <span><b>P / Esc</b> pausar</span>
+      <span><b>R</b> reiniciar após o fim</span>
+    </div>
+  </main>
+  <script>
+"use strict";
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const touchButtons = document.querySelectorAll(".touch-btn");
+ctx.imageSmoothingEnabled = false;
+
+const W = canvas.width;
+const H = canvas.height;
+const TAU = Math.PI * 2;
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const rectsOverlap = (a, b) =>
+  a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+function seededRandom(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+function pixelText(text, x, y, size = 18, align = "left", fill = "#fff", stroke = "#00143b", line = 4) {
+  ctx.save();
+  ctx.font = `900 ${size}px "Courier New", monospace`;
+  ctx.textAlign = align;
+  ctx.textBaseline = "middle";
+  ctx.lineJoin = "miter";
+  ctx.lineWidth = line;
+  ctx.strokeStyle = stroke;
+  ctx.strokeText(text, Math.round(x), Math.round(y));
+  ctx.fillStyle = fill;
+  ctx.fillText(text, Math.round(x), Math.round(y));
+  ctx.restore();
+}
+
+function roundedRect(x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+class AudioFX {
+  constructor() {
+    this.ac = null;
+  }
+  ensure() {
+    if (!this.ac) this.ac = new (window.AudioContext || window.webkitAudioContext)();
+    if (this.ac.state === "suspended") this.ac.resume();
+  }
+  tone(freq, duration, type = "square", volume = 0.035, endFreq = null) {
+    try {
+      this.ensure();
+      const t = this.ac.currentTime;
+      const o = this.ac.createOscillator();
+      const g = this.ac.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(freq, t);
+      if (endFreq) o.frequency.exponentialRampToValueAtTime(Math.max(20, endFreq), t + duration);
+      g.gain.setValueAtTime(volume, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+      o.connect(g).connect(this.ac.destination);
+      o.start(t);
+      o.stop(t + duration);
+    } catch (_) {}
+  }
+  play(name) {
+    if (name === "jump") this.tone(260, 0.09, "square", 0.028, 430);
+    if (name === "coin") this.tone(620, 0.08, "square", 0.025, 920);
+    if (name === "star") { this.tone(520, 0.12, "square", 0.03, 1040); setTimeout(() => this.tone(780, 0.10, "square", 0.02, 1180), 70); }
+    if (name === "orb") this.tone(380, 0.16, "sine", 0.03, 980);
+    if (name === "stomp") this.tone(180, 0.11, "square", 0.03, 90);
+    if (name === "hurt") this.tone(150, 0.23, "sawtooth", 0.035, 65);
+    if (name === "box") this.tone(310, 0.09, "square", 0.025, 500);
+    if (name === "portal") { this.tone(240, 0.55, "sine", 0.025, 980); setTimeout(() => this.tone(480, 0.45, "sine", 0.02, 1300), 190); }
+  }
+}
+
+class Particle {
+  constructor(x, y, opts = {}) {
+    this.x = x;
+    this.y = y;
+    this.vx = opts.vx ?? (Math.random() - 0.5) * 120;
+    this.vy = opts.vy ?? (Math.random() - 0.5) * 120;
+    this.life = opts.life ?? 0.7;
+    this.maxLife = this.life;
+    this.size = opts.size ?? 3;
+    this.color = opts.color ?? "#55ddff";
+    this.gravity = opts.gravity ?? 0;
+    this.glow = opts.glow ?? 0;
+  }
+  update(dt) {
+    this.life -= dt;
+    this.vy += this.gravity * dt;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+  }
+  draw(camera) {
+    if (this.life <= 0) return;
+    const a = clamp(this.life / this.maxLife, 0, 1);
+    const sx = Math.round(this.x - camera.x);
+    const sy = Math.round(this.y - camera.y);
+    ctx.save();
+    ctx.globalAlpha = a;
+    if (this.glow) {
+      ctx.shadowBlur = this.glow;
+      ctx.shadowColor = this.color;
+    }
+    ctx.fillStyle = this.color;
+    const s = Math.max(1, Math.round(this.size * (0.4 + a * 0.6)));
+    ctx.fillRect(sx, sy, s, s);
+    ctx.restore();
+  }
+}
+
+class Camera {
+  constructor(worldWidth) {
+    this.x = 0;
+    this.y = 0;
+    this.worldWidth = worldWidth;
+    this.shake = 0;
+  }
+  update(player, dt) {
+    const target = clamp(player.x + player.w * 0.5 - W * 0.38, 0, this.worldWidth - W);
+    this.x = lerp(this.x, target, 1 - Math.pow(0.0001, dt));
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt);
+  }
+  offsetX() {
+    return this.shake > 0 ? (Math.random() - 0.5) * 8 * (this.shake / 0.3) : 0;
+  }
+  offsetY() {
+    return this.shake > 0 ? (Math.random() - 0.5) * 6 * (this.shake / 0.3) : 0;
+  }
+}
+
+class Platform {
+  constructor(x, y, w, h = 24, opts = {}) {
+    this.x = x; this.y = y; this.w = w; this.h = h;
+    this.kind = opts.kind ?? "rock";
+    this.moving = opts.moving ?? false;
+    this.axis = opts.axis ?? "x";
+    this.range = opts.range ?? 0;
+    this.speed = opts.speed ?? 1;
+    this.phase = opts.phase ?? 0;
+    this.baseX = x; this.baseY = y;
+    this.prevX = x; this.prevY = y;
+    this.dx = 0; this.dy = 0;
+    this.activated = false;
+    this.checkpointEligible = opts.checkpointEligible ?? (w >= 150 && !this.moving && this.kind === "rock");
+  }
+  update(time) {
+    this.prevX = this.x; this.prevY = this.y;
+    if (this.moving) {
+      const t = Math.sin(time * this.speed + this.phase) * this.range;
+      if (this.axis === "x") this.x = this.baseX + t;
+      else this.y = this.baseY + t;
+    }
+    this.dx = this.x - this.prevX;
+    this.dy = this.y - this.prevY;
+  }
+  draw(camera) {
+    const x = Math.round(this.x - camera.x);
+    const y = Math.round(this.y - camera.y);
+    if (x + this.w < -40 || x > W + 40) return;
+
+    if (this.kind === "crate") {
+      ctx.save();
+      ctx.fillStyle = this.activated ? "#39445d" : "#505970";
+      ctx.fillRect(x, y, this.w, this.h);
+      ctx.fillStyle = "#8894aa";
+      ctx.fillRect(x + 3, y + 3, this.w - 6, 4);
+      ctx.fillRect(x + 3, y + this.h - 7, this.w - 6, 4);
+      ctx.fillRect(x + 3, y + 3, 4, this.h - 6);
+      ctx.fillRect(x + this.w - 7, y + 3, 4, this.h - 6);
+      ctx.fillStyle = "#20273b";
+      ctx.fillRect(x + 8, y + 8, this.w - 16, this.h - 16);
+      ctx.fillStyle = this.activated ? "#718099" : "#ffd338";
+      if (this.w > 36) {
+        // pixel lightning bolt
+        const cx = x + this.w / 2, cy = y + this.h / 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + 2, cy - 13); ctx.lineTo(cx - 8, cy + 1); ctx.lineTo(cx - 1, cy + 1);
+        ctx.lineTo(cx - 5, cy + 13); ctx.lineTo(cx + 10, cy - 3); ctx.lineTo(cx + 3, cy - 3);
+        ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      return;
+    }
+
+    ctx.save();
+    // rocky body
+    ctx.fillStyle = "#2a1645";
+    ctx.fillRect(x, y + 7, this.w, this.h - 7);
+    ctx.fillStyle = "#5c347e";
+    for (let px = 0; px < this.w; px += 22) {
+      const yy = y + 14 + ((Math.floor((this.x + px) / 22) % 3) * 5);
+      ctx.fillRect(x + px + 3, yy, 13, 7);
+      ctx.fillStyle = "#371d57";
+      ctx.fillRect(x + px + 7, yy + 6, 10, 5);
+      ctx.fillStyle = "#5c347e";
+    }
+    ctx.fillStyle = "#7b45a1";
+    ctx.fillRect(x, y + 5, this.w, 5);
+    ctx.fillStyle = "#84a82f";
+    ctx.fillRect(x, y, this.w, 6);
+    ctx.fillStyle = "#b4d84a";
+    for (let px = 4; px < this.w; px += 19) ctx.fillRect(x + px, y - 2, 8, 3);
+
+    if (this.moving) {
+      ctx.fillStyle = "#27cff8";
+      ctx.fillRect(x + 7, y + this.h - 3, 10, 2);
+      ctx.fillRect(x + this.w - 17, y + this.h - 3, 10, 2);
+    }
+    ctx.restore();
+  }
+}
+
+class Collectible {
+  constructor(x, y, type = "coin") {
+    this.x = x; this.y = y;
+    this.type = type;
+    this.w = type === "star" ? 20 : 15;
+    this.h = type === "star" ? 20 : 18;
+    this.t = Math.random() * TAU;
+    this.collected = false;
+  }
+  update(dt) { this.t += dt * 4; }
+  draw(camera) {
+    if (this.collected) return;
+    const x = Math.round(this.x - camera.x);
+    const y = Math.round(this.y + Math.sin(this.t) * 3 - camera.y);
+    if (x < -30 || x > W + 30) return;
+    ctx.save();
+    if (this.type === "coin") {
+      ctx.shadowBlur = 10; ctx.shadowColor = "#ffc928";
+      ctx.fillStyle = "#ff9d00"; ctx.fillRect(x + 4, y, 8, 18);
+      ctx.fillStyle = "#ffe05d"; ctx.fillRect(x + 6, y + 2, 4, 14);
+      ctx.fillStyle = "#fff2a0"; ctx.fillRect(x + 7, y + 3, 2, 5);
+    } else if (this.type === "orb") {
+      ctx.shadowBlur = 14; ctx.shadowColor = "#36e6ff";
+      ctx.fillStyle = "#1b76c8"; ctx.beginPath(); ctx.arc(x + 9, y + 9, 9, 0, TAU); ctx.fill();
+      ctx.fillStyle = "#6ff8ff"; ctx.beginPath(); ctx.arc(x + 9, y + 9, 6, 0, TAU); ctx.fill();
+      ctx.fillStyle = "white";
+      ctx.fillRect(x + 8, y + 3, 2, 5); ctx.fillRect(x + 6, y + 7, 6, 2); ctx.fillRect(x + 8, y + 10, 2, 5);
+    } else {
+      ctx.shadowBlur = 12; ctx.shadowColor = "#ffd52e";
+      const cx = x + 10, cy = y + 10;
+      ctx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 === 0 ? 10 : 4.5;
+        const a = -Math.PI / 2 + i * Math.PI / 5;
+        const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = "#ffaf0b"; ctx.fill();
+      ctx.fillStyle = "#ffe76a";
+      ctx.fillRect(cx - 2, cy - 5, 4, 9);
+      ctx.fillRect(cx - 5, cy - 2, 10, 4);
+    }
+    ctx.restore();
+  }
+}
+
+class Enemy {
+  constructor(x, y, type = "walker", opts = {}) {
+    this.x = x; this.y = y;
+    this.spawnX = x; this.spawnY = y;
+    this.type = type;
+    this.w = type === "floater" ? 30 : 28;
+    this.h = type === "tentacle" ? 33 : 28;
+    this.vx = 0; this.vy = 0;
+    this.dir = opts.dir ?? -1;
+    this.range = opts.range ?? 95;
+    this.speed = opts.speed ?? (type === "tentacle" ? 30 : type === "hopper" ? 34 : 42);
+    this.dead = false;
+    this.deathTimer = 0;
+    this.grounded = false;
+    this.timer = Math.random() * 2;
+    this.floatPhase = Math.random() * TAU;
+    this.walkPhase = Math.random() * TAU;
+    this.motionScale = 0.92 + Math.random() * 0.18;
+  }
+  update(dt, game) {
+    if (this.dead) { this.deathTimer -= dt; return; }
+    this.timer -= dt;
+    // Todos os aliens permanecem em movimento o tempo inteiro. Cada tipo
+    // tem um ritmo próprio para que nenhum deles pareça uma figura estática.
+    this.walkPhase += dt * (4.5 + this.speed * 0.035);
+    if (this.type === "floater") {
+      const drift = 0.82 + Math.sin(game.time * 2.1 + this.floatPhase) * 0.18;
+      this.x += this.dir * this.speed * drift * dt;
+      if (Math.abs(this.x - this.spawnX) >= this.range) {
+        this.x = this.spawnX + Math.sign(this.x - this.spawnX) * this.range;
+        this.dir *= -1;
+      }
+      this.y = this.spawnY + Math.sin(game.time * 2.7 + this.floatPhase) * 18;
+      return;
+    }
+
+    if (this.type === "hopper") {
+      this.vx = this.dir * this.speed * (0.9 + Math.sin(this.walkPhase) * 0.1);
+      if (this.grounded && this.timer <= 0) {
+        this.vy = -292;
+        this.timer = 0.92 + Math.random() * 0.55;
+      }
+    } else {
+      const gait = 0.86 + Math.sin(this.walkPhase) * 0.14;
+      this.vx = this.dir * this.speed * gait;
+    }
+    if (Math.abs(this.x - this.spawnX) >= this.range) {
+      this.x = this.spawnX + Math.sign(this.x - this.spawnX) * this.range;
+      this.dir *= -1;
+    }
+    this.vy += 980 * dt;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.grounded = false;
+
+    // Simple vertical platform collision.
+    for (const p of game.platforms) {
+      if (this.x + this.w > p.x && this.x < p.x + p.w && this.y + this.h >= p.y && this.y + this.h - this.vy * dt <= p.y + 6 && this.vy >= 0) {
+        this.y = p.y - this.h;
+        this.vy = 0;
+        this.grounded = true;
+      }
+    }
+  }
+  defeat(game) {
+    if (this.dead) return;
+    this.dead = true;
+    this.deathTimer = 0.34;
+    game.score += 250;
+    game.audio.play("stomp");
+    for (let i = 0; i < 10; i++) game.particles.push(new Particle(this.x + this.w / 2, this.y + this.h / 2, {
+      color: i % 2 ? "#7cf04d" : "#d4ff71", size: 3, life: 0.45, gravity: 250,
+      vx: (Math.random() - 0.5) * 150, vy: -40 - Math.random() * 120
+    }));
+  }
+  draw(camera, game) {
+    if (this.dead && this.deathTimer <= 0) return;
+    const x = Math.round(this.x - camera.x);
+    const y = Math.round(this.y - camera.y);
+    if (x < -60 || x > W + 60) return;
+    const squish = this.dead ? 0.45 : 1;
+    const h = Math.max(8, this.h * squish);
+    const gaitBob = this.dead ? 0 : (this.type === "floater" ? Math.sin(game.time * 5 + this.floatPhase) * 1.5 : Math.abs(Math.sin(this.walkPhase)) * 1.6);
+    const lean = this.dead ? 0 : Math.sin(this.walkPhase) * (this.type === "tentacle" ? 1.2 : 0.7);
+    const yy = y + this.h - h - Math.round(gaitBob);
+
+    ctx.save();
+    if (!this.dead) {
+      ctx.translate(x + this.w / 2, yy + h / 2);
+      ctx.rotate(lean * Math.PI / 180);
+      ctx.translate(-(x + this.w / 2), -(yy + h / 2));
+    }
+    if (this.dead) ctx.globalAlpha = clamp(this.deathTimer / 0.34, 0, 1);
+
+    // tentacles / legs
+    ctx.fillStyle = "#377e2d";
+    if (this.type === "tentacle") {
+      for (let i = 0; i < 4; i++) {
+        const wave = Math.round(Math.sin(game.time * 7.5 + this.walkPhase + i * 0.9) * 3);
+        ctx.fillRect(x + 3 + i * 6, yy + h - 2, 4, 8 + wave);
+        ctx.fillRect(x + 1 + i * 6, yy + h + 5 + wave, 6, 3);
+      }
+    } else if (this.type !== "floater") {
+      ctx.fillRect(x + 4, yy + h - 2, 6, 5);
+      ctx.fillRect(x + this.w - 10, yy + h - 2, 6, 5);
+    }
+
+    // antenna
+    ctx.fillStyle = "#64d944";
+    ctx.fillRect(x + 7, yy - 4, 2, 6);
+    ctx.fillRect(x + this.w - 9, yy - 4, 2, 6);
+    ctx.fillStyle = "#baff65";
+    ctx.fillRect(x + 5, yy - 6, 5, 4);
+    ctx.fillRect(x + this.w - 10, yy - 6, 5, 4);
+
+    // body
+    ctx.fillStyle = this.type === "hopper" ? "#55c33d" : "#4cad36";
+    ctx.fillRect(x + 2, yy + 2, this.w - 4, h - 2);
+    ctx.fillStyle = "#76e44d";
+    ctx.fillRect(x + 5, yy + 4, this.w - 10, Math.max(4, h * 0.35));
+    ctx.fillStyle = "#2d6627";
+    ctx.fillRect(x, yy + 7, 3, Math.max(5, h - 9));
+    ctx.fillRect(x + this.w - 3, yy + 7, 3, Math.max(5, h - 9));
+
+    // cyclops eye
+    const blink = Math.sin(game.time * 1.9 + this.spawnX) > 0.985;
+    ctx.fillStyle = "#0c1a1f";
+    ctx.fillRect(x + 7, yy + 7, this.w - 14, blink ? 3 : 11);
+    if (!blink) {
+      ctx.fillStyle = "#f7fff2";
+      ctx.fillRect(x + 9, yy + 8, this.w - 18, 9);
+      ctx.fillStyle = "#21d7ff";
+      ctx.fillRect(x + 13, yy + 9, 6, 7);
+      ctx.fillStyle = "#071029";
+      ctx.fillRect(x + 15, yy + 11, 3, 4);
+    }
+
+    if (this.type === "floater") {
+      ctx.fillStyle = "#a661df";
+      ctx.fillRect(x + 4, yy + h, this.w - 8, 4);
+      ctx.fillStyle = "#49e8ff";
+      ctx.fillRect(x + 7, yy + h + 4, this.w - 14, 3 + Math.round(Math.random() * 3));
+    }
+    ctx.restore();
+  }
+}
+
+class Player {
+  constructor(x, y) {
+    this.x = x; this.y = y;
+    this.w = 24; this.h = 36;
+    this.vx = 0; this.vy = 0;
+    this.prevX = x; this.prevY = y;
+    this.dir = 1;
+    this.grounded = false;
+    this.wasGrounded = false;
+    this.coyote = 0;
+    this.jumpBuffer = 0;
+    this.invuln = 0;
+    this.anim = 0;
+    this.state = "idle";
+    this.onPlatform = null;
+    this.portalTimer = 0;
+    this.portalStartX = x;
+    this.portalStartY = y;
+    this.portalFragments = [];
+    this.portalEffectReady = false;
+  }
+  update(dt, game) {
+    this.prevX = this.x; this.prevY = this.y;
+    if (this.invuln > 0) this.invuln -= dt;
+    if (this.state === "portal") {
+      this.portalTimer += dt;
+      this.vx = 0;
+      this.vy = 0;
+      this.anim += dt * 10;
+
+      // Sequência cinematográfica: primeiro o personagem entra totalmente na
+      // área azul, depois seu corpo é digitalizado e só então é absorvido.
+      const pull = clamp(this.portalTimer / 0.58, 0, 1);
+      const easedPull = 1 - Math.pow(1 - pull, 3);
+      const targetX = game.portal.x + game.portal.w / 2 - this.w / 2;
+      const targetY = game.portal.y + 77 - this.h / 2;
+      this.x = lerp(this.portalStartX, targetX, easedPull);
+      this.y = lerp(this.portalStartY, targetY, easedPull);
+      return;
+    }
+
+    this.wasGrounded = this.grounded;
+    if (this.grounded) this.coyote = 0.11; else this.coyote -= dt;
+    this.jumpBuffer -= dt;
+
+    let move = 0;
+    if (game.keys.left) move -= 1;
+    if (game.keys.right) move += 1;
+    if (move) this.dir = move;
+
+    const accel = this.grounded ? 1300 : 820;
+    const maxSpeed = 235;
+    if (move) this.vx = clamp(this.vx + move * accel * dt, -maxSpeed, maxSpeed);
+    else {
+      const drag = (this.grounded ? 1700 : 180) * dt;
+      if (Math.abs(this.vx) <= drag) this.vx = 0;
+      else this.vx -= Math.sign(this.vx) * drag;
+    }
+
+    if (game.keys.jumpPressed) {
+      this.jumpBuffer = 0.12;
+      game.keys.jumpPressed = false;
+    }
+    if (this.jumpBuffer > 0 && this.coyote > 0) {
+      this.vy = -425;
+      this.grounded = false;
+      this.coyote = 0;
+      this.jumpBuffer = 0;
+      game.audio.play("jump");
+      for (let i = 0; i < 5; i++) game.particles.push(new Particle(this.x + this.w / 2, this.y + this.h, {
+        color: "#d7f5ff", size: 2, life: 0.28, gravity: -20,
+        vx: (Math.random() - 0.5) * 70, vy: 20 + Math.random() * 30
+      }));
+    }
+    if (!game.keys.jump && this.vy < -150) this.vy += 850 * dt;
+
+    this.vy += 1080 * dt;
+    this.vy = Math.min(this.vy, 700);
+
+    // Carry by moving platform.
+    if (this.onPlatform && this.wasGrounded) {
+      this.x += this.onPlatform.dx;
+      this.y += this.onPlatform.dy;
+    }
+    this.onPlatform = null;
+
+    // Horizontal collision.
+    this.x += this.vx * dt;
+    for (const p of game.platforms) {
+      if (!rectsOverlap(this, p)) continue;
+      if (this.vx > 0) this.x = p.x - this.w;
+      else if (this.vx < 0) this.x = p.x + p.w;
+      this.vx = 0;
+    }
+
+    // Vertical collision.
+    this.grounded = false;
+    this.y += this.vy * dt;
+    for (const p of game.platforms) {
+      if (!rectsOverlap(this, p)) continue;
+      if (this.vy > 0 && this.prevY + this.h <= p.prevY + 8) {
+        this.y = p.y - this.h;
+        const impact = this.vy;
+        this.vy = 0;
+        this.grounded = true;
+        this.onPlatform = p;
+        if (p.kind === "crate" && !p.activated && impact > 80) game.activateCrate(p);
+        if (p.checkpointEligible && p.x > game.checkpoint.x + 260) {
+          game.checkpoint = { x: p.x + 18, y: p.y - this.h - 2 };
+        }
+      } else if (this.vy < 0 && this.prevY >= p.prevY + p.h - 8) {
+        this.y = p.y + p.h;
+        this.vy = 0;
+        if (p.kind === "crate" && !p.activated) game.activateCrate(p);
+      }
+    }
+
+    // hazards
+    for (const s of game.spikes) {
+      const hit = { x: s.x + 4, y: s.y + 4, w: s.w - 8, h: s.h - 4 };
+      if (rectsOverlap(this, hit)) {
+        game.loseLife(true);
+        return;
+      }
+    }
+
+    // enemies
+    for (const e of game.enemies) {
+      if (e.dead || !rectsOverlap(this, e)) continue;
+      const prevBottom = this.prevY + this.h;
+      if (this.vy > 0 && prevBottom <= e.y + 10) {
+        e.defeat(game);
+        this.vy = -300;
+      } else if (this.invuln <= 0) {
+        this.invuln = 1.05;
+        game.hearts--;
+        game.audio.play("hurt");
+        game.camera.shake = 0.3;
+        this.vx = this.x < e.x ? -260 : 260;
+        this.vy = -240;
+        for (let i = 0; i < 12; i++) game.particles.push(new Particle(this.x + this.w / 2, this.y + this.h / 2, {
+          color: "#ff5d74", size: 3, life: 0.5, gravity: 220,
+          vx: (Math.random() - 0.5) * 180, vy: -40 - Math.random() * 90
+        }));
+        if (game.hearts <= 0) { game.fail(); return; }
+      }
+    }
+
+    // collectibles
+    for (const c of game.collectibles) {
+      if (c.collected || !rectsOverlap(this, c)) continue;
+      c.collected = true;
+      if (c.type === "coin") { game.score += 100; game.audio.play("coin"); }
+      if (c.type === "star") { game.score += 300; game.starsCollected++; game.audio.play("star"); }
+      if (c.type === "orb") { game.score += 200; game.energy++; game.audio.play("orb"); }
+      const color = c.type === "coin" ? "#ffd22e" : c.type === "star" ? "#ffe95b" : "#55eaff";
+      for (let i = 0; i < 10; i++) game.particles.push(new Particle(c.x + c.w / 2, c.y + c.h / 2, {
+        color, size: 3, life: 0.45, gravity: 70,
+        vx: (Math.random() - 0.5) * 130, vy: (Math.random() - 0.5) * 130
+      }));
+    }
+
+    // portal
+    if (game.portal.active && rectsOverlap(this, game.portal.triggerRect())) {
+      this.state = "portal";
+      this.portalTimer = 0;
+      this.portalStartX = this.x;
+      this.portalStartY = this.y;
+      this.portalEffectReady = false;
+      this.portalFragments = [];
+      game.audio.play("portal");
+      game.portal.entering = true;
+      game.camera.shake = 0.12;
+      this.preparePortalEffect();
+    }
+
+    if (this.y > H + 180) {
+      game.loseLife(true);
+      return;
+    }
+
+    if (!this.grounded) this.state = this.vy < 0 ? "jump" : "fall";
+    else if (Math.abs(this.vx) < 18) this.state = "idle";
+    else if (Math.abs(this.vx) > 175) this.state = "run";
+    else this.state = "walk";
+    this.anim += dt * (this.state === "run" ? 13 : this.state === "walk" ? 8 : 5);
+  }
+  preparePortalEffect() {
+    if (this.portalEffectReady) return;
+    this.portalEffectReady = true;
+
+    // Reconstrói a silhueta do sprite usando pequenos pixels. Cada pixel
+    // guarda sua cor original e um atraso próprio para a desmaterialização.
+    // Assim o corpo realmente "vira pixels" em vez de apenas ficar transparente.
+    const pixels = new Map();
+    const put = (px, py, color) => {
+      if (px < -9 || px > 26 || py < 0 || py > 38) return;
+      pixels.set(`${px},${py}`, { x: px, y: py, color });
+    };
+    const rect = (x, y, w, h, color) => {
+      for (let yy = Math.floor(y); yy < Math.ceil(y + h); yy++) {
+        for (let xx = Math.floor(x); xx < Math.ceil(x + w); xx++) put(xx, yy, color);
+      }
+    };
+
+    // Capa/mochila.
+    rect(-5, 16, 8, 12, "#c51f35");
+    rect(-8, 20, 7, 7, "#c51f35");
+    rect(-6, 18, 4, 4, "#ff4558");
+
+    // Pernas e tênis.
+    rect(6, 27, 5, 7, "#69432e");
+    rect(14, 27, 5, 7, "#69432e");
+    rect(4, 33, 8, 3, "#f1f1ef");
+    rect(13, 33, 8, 3, "#f1f1ef");
+    rect(6, 31, 5, 2, "#ed3a2c");
+    rect(15, 31, 5, 2, "#ed3a2c");
+
+    // Roupa espacial e estrela.
+    rect(5, 15, 15, 14, "#147dd2");
+    rect(7, 16, 11, 4, "#27b9ff");
+    rect(11, 20, 3, 7, "#ffe143");
+    rect(9, 22, 7, 3, "#ffe143");
+
+    // Braços e mãos. O braço direito fica levemente levantado, como na referência.
+    rect(1, 16, 5, 10, "#8a4d2c");
+    rect(19, 13, 5, 10, "#8a4d2c");
+    rect(1, 23, 5, 5, "#c87945");
+    rect(19, 10, 5, 5, "#c87945");
+    rect(23, 9, 2, 3, "#c87945");
+    rect(25, 10, 1, 3, "#c87945");
+
+    // Cabeça, orelhas e cabelo cacheado.
+    rect(5, 5, 15, 12, "#9a5735");
+    rect(7, 7, 11, 9, "#c97848");
+    rect(3, 9, 3, 5, "#a85f39");
+    rect(20, 9, 3, 5, "#a85f39");
+    const hair = [[5,2],[9,0],[13,1],[17,2],[3,5],[7,4],[11,3],[15,4],[19,5]];
+    for (const [hx, hy] of hair) rect(hx, hy, 5, 5, "#24130e");
+    rect(7, 3, 11, 4, "#3a1c12");
+
+    // Rosto alegre.
+    rect(9, 9, 2, 3, "#17120f");
+    rect(16, 9, 2, 3, "#17120f");
+    rect(9, 9, 1, 1, "#ffffff");
+    rect(16, 9, 1, 1, "#ffffff");
+    rect(11, 14, 5, 2, "#5d241c");
+    rect(12, 14, 3, 1, "#ffffff");
+
+    // Pseudoaleatoriedade determinística: o efeito fica bonito e estável,
+    // sem os pixels "saltarem" de posição a cada frame.
+    const rand01 = (x, y, salt = 0) => {
+      let n = ((x + 19) * 374761393 + (y + 41) * 668265263 + salt * 69069) >>> 0;
+      n = (n ^ (n >>> 13)) * 1274126177 >>> 0;
+      return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+    };
+
+    this.portalFragments = [...pixels.values()].map((p, i) => {
+      // A transformação começa nos pés e vai subindo pelo corpo, com variação.
+      const vertical = 1 - clamp(p.y / 36, 0, 1);
+      const r1 = rand01(p.x, p.y, 1);
+      const r2 = rand01(p.x, p.y, 2);
+      const r3 = rand01(p.x, p.y, 3);
+      return {
+        ...p,
+        delay: 0.38 + vertical * 0.82 + r1 * 0.16,
+        swirl: (r2 - 0.5) * 28,
+        targetX: (r3 - 0.5) * 15,
+        targetY: (r1 - 0.5) * 12,
+        blue: r2 < 0.34 ? "#9affff" : r2 < 0.67 ? "#23dfff" : "#1688ff",
+        pulse: r3 * Math.PI * 2,
+        index: i
+      };
+    });
+  }
+
+  drawPortalTransition(camera) {
+    if (!this.portalEffectReady) this.preparePortalEffect();
+
+    const baseX = this.x - camera.x;
+    const baseY = this.y - camera.y;
+    const portalCX = game.portal.x + game.portal.w / 2 - camera.x;
+    const portalCY = game.portal.y + 77 - camera.y;
+    const time = this.portalTimer;
+
+    // 0.00–0.42s: ainda vemos o personagem inteiro entrando no portal.
+    // Isso deixa claro que ele realmente atravessou a entrada antes da transformação.
+    if (time < 0.42) {
+      const blueMix = clamp((time - 0.18) / 0.24, 0, 1);
+      ctx.save();
+      this.drawSprite(Math.round(baseX), Math.round(baseY), this.dir);
+      if (blueMix > 0) {
+        ctx.globalCompositeOperation = "screen";
+        ctx.globalAlpha = blueMix * 0.42;
+        ctx.fillStyle = "#35ddff";
+        ctx.fillRect(Math.round(baseX - 3), Math.round(baseY - 2), this.w + 7, this.h + 5);
+      }
+      ctx.restore();
+    }
+
+    // Halo pulsante que aumenta conforme a digitalização avança.
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    const glowIn = clamp((time - 0.12) / 0.58, 0, 1);
+    const glowOut = 1 - clamp((time - 2.45) / 0.45, 0, 1);
+    const glowStrength = glowIn * glowOut * (0.58 + Math.sin(time * 15) * 0.08);
+    if (glowStrength > 0) {
+      const glow = ctx.createRadialGradient(baseX + this.w / 2, baseY + this.h / 2, 2, baseX + this.w / 2, baseY + this.h / 2, 48);
+      glow.addColorStop(0, `rgba(150,255,255,${glowStrength})`);
+      glow.addColorStop(0.42, `rgba(22,185,255,${glowStrength * 0.54})`);
+      glow.addColorStop(1, "rgba(0,90,255,0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(baseX - 38, baseY - 38, 100, 112);
+    }
+    ctx.restore();
+
+    // Linha de escaneamento azul sobe dos pés à cabeça.
+    if (time > 0.34 && time < 1.56) {
+      const scan = clamp((time - 0.34) / 1.12, 0, 1);
+      const scanY = baseY + this.h - scan * (this.h + 5);
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      const sg = ctx.createLinearGradient(0, scanY - 7, 0, scanY + 7);
+      sg.addColorStop(0, "rgba(35,210,255,0)");
+      sg.addColorStop(0.5, "rgba(175,255,255,.95)");
+      sg.addColorStop(1, "rgba(25,128,255,0)");
+      ctx.fillStyle = sg;
+      ctx.fillRect(baseX - 7, scanY - 7, this.w + 14, 14);
+      ctx.restore();
+    }
+
+    for (const f of this.portalFragments) {
+      const convert = clamp((time - f.delay) / 0.34, 0, 1);
+      const converted = convert * convert * (3 - 2 * convert);
+      const sx = baseX + f.x;
+      const sy = baseY + f.y;
+
+      // A parte ainda não alcançada pelo scanner permanece com sua cor original.
+      if (convert <= 0) {
+        if (time >= 0.42) {
+          ctx.fillStyle = f.color;
+          ctx.fillRect(Math.round(sx), Math.round(sy), 1, 1);
+        }
+        continue;
+      }
+
+      // Primeiro o pixel fica azul no próprio corpo; depois se desprende e viaja
+      // visivelmente até o núcleo, encolhendo ao ser absorvido.
+      const absorbStart = f.delay + 0.18;
+      const absorb = clamp((time - absorbStart) / 1.18, 0, 1);
+      const ease = 1 - Math.pow(1 - absorb, 3);
+      const arc = Math.sin(ease * Math.PI);
+      const tx = portalCX + f.targetX * (1 - ease);
+      const ty = portalCY + f.targetY * (1 - ease);
+      const px = lerp(sx, tx, ease) + arc * f.swirl;
+      const py = lerp(sy, ty, ease) - arc * (7 + Math.abs(f.swirl) * 0.18);
+      const shrink = absorb < 0.72 ? 2 : absorb < 0.92 ? 1.5 : 1;
+      const alpha = absorb < 0.94 ? 1 : 1 - (absorb - 0.94) / 0.06;
+      const sparkle = 0.78 + Math.sin(time * 24 + f.pulse) * 0.22;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = clamp(alpha * sparkle, 0, 1);
+      ctx.fillStyle = f.blue;
+      ctx.shadowColor = absorb < 0.9 ? "#4eefff" : "#ffffff";
+      ctx.shadowBlur = absorb < 0.9 ? 6 : 2;
+      ctx.fillRect(Math.round(px), Math.round(py), shrink, shrink);
+      ctx.restore();
+    }
+
+    // Fluxo de partículas que aponta para o centro do portal, reforçando a sucção.
+    if (time > 0.52 && time < 2.78) {
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      for (let i = 0; i < 18; i++) {
+        const phase = (time * (0.48 + i * 0.018) + i * 0.071) % 1;
+        const radius = (1 - phase) * (22 + (i % 5) * 5);
+        const angle = i * 1.73 + time * 5.4;
+        const px = lerp(baseX + this.w / 2 + Math.cos(angle) * radius, portalCX, phase);
+        const py = lerp(baseY + this.h / 2 + Math.sin(angle) * radius, portalCY, phase);
+        ctx.globalAlpha = (1 - phase) * 0.72;
+        ctx.fillStyle = i % 4 === 0 ? "#c8ffff" : i % 2 ? "#29e5ff" : "#197dff";
+        const sz = i % 6 === 0 ? 3 : 2;
+        ctx.fillRect(Math.round(px), Math.round(py), sz, sz);
+      }
+      ctx.restore();
+    }
+
+    // Pulso final: quando o último pixel entra, o núcleo comprime e brilha.
+    if (time > 2.46) {
+      const p = clamp((time - 2.46) / 0.46, 0, 1);
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = (1 - p) * 0.9;
+      ctx.fillStyle = "#baffff";
+      ctx.beginPath();
+      ctx.arc(portalCX, portalCY, 5 + p * 38, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  draw(camera) {
+    let x = Math.round(this.x - camera.x);
+    let y = Math.round(this.y - camera.y);
+    if (this.state === "portal") {
+      this.drawPortalTransition(camera);
+      return;
+    }
+    if (this.invuln > 0 && Math.floor(this.invuln * 14) % 2 === 0) return;
+    this.drawSprite(x, y, this.dir);
+  }
+  drawSprite(x, y, dir) {
+    ctx.save();
+    if (dir < 0) { ctx.translate(x + this.w, y); ctx.scale(-1, 1); x = 0; y = 0; }
+
+    const run = this.state === "run" || this.state === "walk";
+    const leg = run ? Math.round(Math.sin(this.anim) * 3) : 0;
+    const arm = run ? Math.round(Math.sin(this.anim + Math.PI) * 3) : (this.state === "jump" ? -3 : 0);
+    const bob = this.state === "idle" ? Math.round(Math.sin(this.anim * 0.55) * 1) : 0;
+    y += bob;
+
+    // cape / backpack trail
+    ctx.fillStyle = "#c51f35";
+    if (run || this.state === "jump") {
+      ctx.fillRect(x - 5, y + 16, 8, 12);
+      ctx.fillRect(x - 8, y + 20, 7, 7);
+      ctx.fillStyle = "#ff4558"; ctx.fillRect(x - 6, y + 18, 4, 4);
+    }
+
+    // legs + shoes
+    ctx.fillStyle = "#69432e";
+    ctx.fillRect(x + 6, y + 27 + leg, 5, 7);
+    ctx.fillRect(x + 14, y + 27 - leg, 5, 7);
+    ctx.fillStyle = "#f1f1ef";
+    ctx.fillRect(x + 4, y + 33 + leg, 8, 3);
+    ctx.fillRect(x + 13, y + 33 - leg, 8, 3);
+    ctx.fillStyle = "#ed3a2c";
+    ctx.fillRect(x + 6, y + 31 + leg, 5, 2);
+    ctx.fillRect(x + 15, y + 31 - leg, 5, 2);
+
+    // torso / space explorer shirt
+    ctx.fillStyle = "#147dd2";
+    ctx.fillRect(x + 5, y + 15, 15, 14);
+    ctx.fillStyle = "#27b9ff";
+    ctx.fillRect(x + 7, y + 16, 11, 4);
+    // star emblem
+    ctx.fillStyle = "#ffe143";
+    ctx.fillRect(x + 11, y + 20, 3, 7);
+    ctx.fillRect(x + 9, y + 22, 7, 3);
+
+    // arms
+    ctx.fillStyle = "#8a4d2c";
+    ctx.fillRect(x + 1, y + 17 + arm, 5, 10);
+    ctx.fillRect(x + 19, y + 17 - arm, 5, 10);
+    ctx.fillStyle = "#c87945";
+    ctx.fillRect(x + 1, y + 24 + arm, 5, 5);
+    ctx.fillRect(x + 19, y + 24 - arm, 5, 5);
+
+    // head
+    ctx.fillStyle = "#9a5735";
+    ctx.fillRect(x + 5, y + 5, 15, 12);
+    ctx.fillStyle = "#c97848";
+    ctx.fillRect(x + 7, y + 7, 11, 9);
+    // ear
+    ctx.fillStyle = "#a85f39"; ctx.fillRect(x + 3, y + 9, 3, 5); ctx.fillRect(x + 20, y + 9, 3, 5);
+
+    // curly hair blocks
+    ctx.fillStyle = "#24130e";
+    const hair = [[5,2],[9,0],[13,1],[17,2],[3,5],[7,4],[11,3],[15,4],[19,5]];
+    for (const [hx, hy] of hair) ctx.fillRect(x + hx, y + hy, 5, 5);
+    ctx.fillStyle = "#3a1c12";
+    ctx.fillRect(x + 7, y + 3, 11, 4);
+
+    // face
+    ctx.fillStyle = "#17120f";
+    ctx.fillRect(x + 9, y + 9, 2, 3);
+    ctx.fillRect(x + 16, y + 9, 2, 3);
+    ctx.fillStyle = "white";
+    ctx.fillRect(x + 9, y + 9, 1, 1);
+    ctx.fillRect(x + 16, y + 9, 1, 1);
+    ctx.fillStyle = "#5d241c";
+    ctx.fillRect(x + 11, y + 14, 5, 2);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(x + 12, y + 14, 3, 1);
+    ctx.restore();
+  }
+}
+
+class Portal {
+  constructor(x, y) {
+    this.x = x; this.y = y;
+    this.w = 92; this.h = 118;
+    this.active = true;
+    this.entering = false;
+    this.t = 0;
+  }
+  triggerRect() { return { x: this.x + 26, y: this.y + 40, w: 40, h: 76 }; }
+  update(dt, game) {
+    this.t += dt;
+    if (this.entering) {
+      for (let i = 0; i < 4; i++) game.particles.push(new Particle(this.x + 46 + (Math.random() - 0.5) * 34, this.y + 105, {
+        color: Math.random() > 0.5 ? "#65f4ff" : "#3c80ff", size: 2 + Math.random() * 3, life: 0.6,
+        vx: (Math.random() - 0.5) * 20, vy: -60 - Math.random() * 80
+      }));
+    }
+  }
+  draw(camera) {
+    const x = Math.round(this.x - camera.x), y = Math.round(this.y - camera.y);
+    if (x < -140 || x > W + 140) return;
+    ctx.save();
+    // glow
+    const grad = ctx.createRadialGradient(x + 46, y + 75, 2, x + 46, y + 75, 60);
+    grad.addColorStop(0, "rgba(99,247,255,.75)");
+    grad.addColorStop(0.4, "rgba(0,145,255,.25)");
+    grad.addColorStop(1, "rgba(0,80,255,0)");
+    ctx.fillStyle = grad; ctx.fillRect(x - 20, y + 10, 132, 130);
+
+    // frame
+    ctx.fillStyle = "#465570"; ctx.fillRect(x + 9, y + 34, 74, 84);
+    ctx.fillStyle = "#91a3bb"; ctx.fillRect(x + 13, y + 38, 66, 6);
+    ctx.fillStyle = "#26334e"; ctx.fillRect(x + 20, y + 45, 52, 73);
+    ctx.fillStyle = "#778aa6"; ctx.fillRect(x + 5, y + 43, 13, 76); ctx.fillRect(x + 74, y + 43, 13, 76);
+    ctx.fillStyle = "#b5c3d3"; ctx.fillRect(x + 8, y + 48, 4, 55); ctx.fillRect(x + 80, y + 48, 4, 55);
+    ctx.fillStyle = "#0fc9ff"; ctx.fillRect(x + 12, y + 57, 3, 26); ctx.fillRect(x + 77, y + 57, 3, 26);
+
+    // energy interior
+    const pulse = (this.entering ? 0.90 : 0.75) + Math.sin(this.t * (this.entering ? 10 : 6)) * (this.entering ? 0.10 : 0.15);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#057fdc"; ctx.fillRect(x + 24, y + 47, 44, 68);
+    ctx.fillStyle = "#24dcff"; ctx.fillRect(x + 30, y + 47, 32, 68);
+    ctx.fillStyle = "#a8ffff";
+    for (let i = 0; i < 8; i++) {
+      const px = x + 30 + ((i * 13 + Math.floor(this.t * 35)) % 30);
+      const py = y + 50 + ((i * 19 + Math.floor(this.t * 46)) % 61);
+      ctx.fillRect(px, py, 2, 5);
+    }
+    ctx.globalAlpha = 1;
+
+    if (this.entering) {
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      for (let r = 0; r < 3; r++) {
+        const rr = 8 + r * 9 + Math.sin(this.t * 8 + r) * 2;
+        ctx.globalAlpha = 0.34 - r * 0.07;
+        ctx.strokeStyle = r === 0 ? "#c5ffff" : "#31dfff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x + 46, y + 78, rr, this.t * 5 + r, this.t * 5 + r + Math.PI * 1.35);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // top sign
+    ctx.fillStyle = "#273654"; ctx.fillRect(x, y, 92, 33);
+    ctx.fillStyle = "#7a8eaa"; ctx.fillRect(x + 4, y + 4, 84, 4);
+    ctx.strokeStyle = "#12ccff"; ctx.lineWidth = 2; ctx.strokeRect(x + 7, y + 9, 78, 19);
+    pixelText("PORTAL", x + 46, y + 15, 9, "center", "#63f4ff", "#07203d", 2);
+    pixelText("ATIVADO!", x + 46, y + 24, 9, "center", "#63f4ff", "#07203d", 2);
+
+    // base hazard stripes
+    ctx.fillStyle = "#242c3d"; ctx.fillRect(x + 2, y + 116, 88, 10);
+    for (let i = 0; i < 7; i++) {
+      ctx.fillStyle = i % 2 ? "#171b25" : "#f2b415";
+      ctx.fillRect(x + 5 + i * 12, y + 118, 9, 6);
+    }
+    ctx.restore();
+  }
+
+  // Camada frontal do portal. É desenhada por cima do personagem durante a
+  // entrada para criar profundidade: o menino realmente parece passar para
+  // dentro da máquina, e não apenas ficar desenhado na frente dela.
+  drawForeground(camera) {
+    if (!this.entering) return;
+    const x = Math.round(this.x - camera.x), y = Math.round(this.y - camera.y);
+    if (x < -140 || x > W + 140) return;
+    ctx.save();
+
+    // Véu de energia na frente dos fragmentos já absorvidos.
+    ctx.globalCompositeOperation = "screen";
+    ctx.globalAlpha = 0.22 + Math.sin(this.t * 11) * 0.05;
+    ctx.fillStyle = "#47eaff";
+    ctx.fillRect(x + 27, y + 49, 38, 64);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
+    // Moldura frontal e colunas laterais.
+    ctx.fillStyle = "#778aa6";
+    ctx.fillRect(x + 5, y + 43, 13, 76);
+    ctx.fillRect(x + 74, y + 43, 13, 76);
+    ctx.fillStyle = "#b5c3d3";
+    ctx.fillRect(x + 8, y + 48, 4, 55);
+    ctx.fillRect(x + 80, y + 48, 4, 55);
+    ctx.fillStyle = "#0fc9ff";
+    ctx.fillRect(x + 12, y + 57, 3, 26);
+    ctx.fillRect(x + 77, y + 57, 3, 26);
+
+    // Placa e base ficam totalmente à frente, reforçando o efeito de passagem.
+    ctx.fillStyle = "#273654";
+    ctx.fillRect(x, y, 92, 33);
+    ctx.fillStyle = "#7a8eaa";
+    ctx.fillRect(x + 4, y + 4, 84, 4);
+    ctx.strokeStyle = "#12ccff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 7, y + 9, 78, 19);
+    pixelText("PORTAL", x + 46, y + 15, 9, "center", "#63f4ff", "#07203d", 2);
+    pixelText("ATIVADO!", x + 46, y + 24, 9, "center", "#63f4ff", "#07203d", 2);
+
+    ctx.fillStyle = "#242c3d";
+    ctx.fillRect(x + 2, y + 116, 88, 10);
+    for (let i = 0; i < 7; i++) {
+      ctx.fillStyle = i % 2 ? "#171b25" : "#f2b415";
+      ctx.fillRect(x + 5 + i * 12, y + 118, 9, 6);
+    }
+    ctx.restore();
+  }
+}
+
+class Game {
+  constructor() {
+    this.worldWidth = 9100;
+    this.time = 0;
+    this.state = "playing";
+    this.score = 0;
+    this.hearts = 3;
+    this.starsCollected = 0;
+    this.energy = 0;
+    this.keys = { left: false, right: false, jump: false, jumpPressed: false };
+    this.audio = new AudioFX();
+    this.camera = new Camera(this.worldWidth);
+    this.particles = [];
+    this.platforms = [];
+    this.collectibles = [];
+    this.enemies = [];
+    this.spikes = [];
+    this.decorations = [];
+    this.portal = new Portal(8870, 302);
+    this.player = new Player(90, 360);
+    this.checkpoint = { x: 90, y: 360 };
+    this.message = { text: "RUMO ÀS ESTRELAS!", timer: 2.2 };
+    this.flash = 0;
+    this.generateBackground();
+    this.buildLevel();
+    this.bindControls();
+  }
+
+  generateBackground() {
+    const rnd = seededRandom(424242);
+    this.stars = [];
+    for (let i = 0; i < 520; i++) {
+      this.stars.push({
+        x: rnd() * this.worldWidth,
+        y: 28 + rnd() * 430,
+        size: rnd() < 0.88 ? 1 : rnd() < 0.97 ? 2 : 3,
+        layer: 0.08 + rnd() * 0.30,
+        tw: rnd() * TAU,
+        tint: rnd() < 0.18 ? "#c07cff" : rnd() < 0.34 ? "#58d9ff" : "#ffffff"
+      });
+    }
+    this.nebulae = [
+      { x: 550, y: 330, sx: 420, sy: 75, layer: .12, hue: "rgba(112,33,190,.20)" },
+      { x: 2200, y: 190, sx: 510, sy: 82, layer: .14, hue: "rgba(24,97,210,.16)" },
+      { x: 3950, y: 365, sx: 540, sy: 90, layer: .10, hue: "rgba(190,28,197,.18)" },
+      { x: 6100, y: 170, sx: 470, sy: 80, layer: .13, hue: "rgba(72,48,208,.17)" },
+      { x: 8050, y: 330, sx: 520, sy: 85, layer: .11, hue: "rgba(177,30,204,.20)" },
+    ];
+    this.planets = [
+      { x: 500, y: 125, r: 58, kind: "saturn", layer: .10 },
+      { x: 1770, y: 125, r: 38, kind: "red", layer: .12 },
+      { x: 2850, y: 110, r: 62, kind: "earth", layer: .08 },
+      { x: 4820, y: 100, r: 50, kind: "purple", layer: .10 },
+      { x: 6630, y: 145, r: 40, kind: "red", layer: .12 },
+      { x: 8350, y: 110, r: 66, kind: "earth", layer: .08 }
+    ];
+    this.asteroids = [];
+    for (let i = 0; i < 38; i++) {
+      this.asteroids.push({ x: 200 + rnd() * (this.worldWidth - 400), y: 85 + rnd() * 300, r: 5 + rnd() * 12, layer: .22 + rnd() * .24, rot: rnd() * TAU });
+    }
+  }
+
+  buildLevel() {
+    const P = (x, y, w, h = 28, opts = {}) => this.platforms.push(new Platform(x, y, w, h, opts));
+    const C = (x, y, type) => this.collectibles.push(new Collectible(x, y, type));
+    const E = (x, y, type, opts) => this.enemies.push(new Enemy(x, y, type, opts));
+    const S = (x, y, w = 56, h = 22) => this.spikes.push({ x, y, w, h });
+    const D = (type, x, y, extra = {}) => this.decorations.push({ type, x, y, ...extra });
+
+    // 0–1400: safe introduction
+    P(0, 454, 460, 60);
+    P(540, 420, 165, 42);
+    P(775, 382, 145, 40);
+    P(1010, 430, 240, 50);
+    P(1295, 390, 165, 42);
+    C(150, 400, "coin"); C(185, 400, "coin"); C(220, 400, "coin");
+    C(575, 365, "star"); C(820, 330, "coin"); C(855, 330, "coin"); C(1090, 377, "orb");
+    E(1080, 402, "walker", { range: 75 });
+    D("sign", 30, 454, { text1: "RUMO ÀS", text2: "ESTRELAS!" });
+    D("beacon", 385, 454);
+
+    // 1400–3000: aliens, crates and vertical rhythm
+    P(1515, 444, 215, 55);
+    P(1815, 395, 160, 38);
+    P(2050, 345, 150, 38);
+    P(2280, 410, 230, 48);
+    P(2575, 365, 120, 35, { moving: true, axis: "y", range: 40, speed: 1.4 });
+    P(2805, 425, 220, 48);
+    P(1660, 392, 50, 50, { kind: "crate", checkpointEligible: false });
+    C(1550, 392, "coin"); C(1585, 392, "coin"); C(1890, 345, "star");
+    C(2070, 300, "orb"); C(2110, 300, "orb"); C(2330, 360, "coin"); C(2370, 360, "coin");
+    C(2855, 375, "star");
+    E(1570, 416, "tentacle", { range: 65 });
+    E(1870, 367, "hopper", { range: 55 });
+    E(2340, 382, "walker", { range: 80 });
+    E(2650, 260, "floater", { range: 100, speed: 34 });
+    S(1730, 474, 78);
+    D("computer", 2925, 425);
+
+    // 3000–4550: gaps + moving platforms + rocket set piece
+    P(3100, 388, 150, 38);
+    P(3335, 440, 205, 48);
+    P(3600, 388, 130, 36, { moving: true, axis: "x", range: 55, speed: 1.25, phase: 1.2 });
+    P(3835, 334, 165, 38);
+    P(4070, 410, 240, 52);
+    P(4375, 372, 165, 40);
+    P(3460, 390, 50, 50, { kind: "crate", checkpointEligible: false });
+    C(3150, 338, "coin"); C(3190, 338, "coin");
+    C(3375, 390, "star"); C(3885, 284, "star"); C(3930, 284, "coin");
+    C(4140, 360, "orb"); C(4180, 360, "orb"); C(4220, 360, "orb");
+    E(3390, 412, "walker", { range: 60 });
+    E(3890, 306, "tentacle", { range: 55 });
+    E(4220, 382, "hopper", { range: 70 });
+    S(3545, 485, 110);
+    D("rocket", 4015, 410);
+    D("antenna", 4450, 372);
+
+    // 4550–6100: denser enemy section
+    P(4625, 435, 240, 50);
+    P(4950, 385, 145, 38);
+    P(5185, 330, 135, 38);
+    P(5410, 398, 215, 46);
+    P(5695, 350, 120, 36, { moving: true, axis: "y", range: 55, speed: 1.6, phase: 2.3 });
+    P(5895, 430, 225, 50);
+    P(4740, 385, 50, 50, { kind: "crate", checkpointEligible: false });
+    C(4665, 382, "coin"); C(4700, 382, "coin"); C(4995, 333, "star");
+    C(5225, 280, "orb"); C(5265, 280, "coin");
+    C(5450, 348, "coin"); C(5490, 348, "coin"); C(5530, 348, "star");
+    C(5950, 380, "orb"); C(5990, 380, "orb");
+    E(4800, 407, "walker", { range: 60 });
+    E(5000, 357, "tentacle", { range: 45 });
+    E(5230, 225, "floater", { range: 85, speed: 42 });
+    E(5480, 370, "hopper", { range: 65 });
+    E(5980, 402, "walker", { range: 70 });
+    S(4868, 476, 75); S(5628, 475, 62);
+    D("beacon", 6065, 430);
+
+    // 6100–7600: harder platforming but still forgiving
+    P(6190, 390, 145, 40);
+    P(6430, 340, 125, 38, { moving: true, axis: "x", range: 50, speed: 1.4 });
+    P(6660, 405, 185, 45);
+    P(6925, 350, 130, 36);
+    P(7165, 300, 130, 36, { moving: true, axis: "y", range: 45, speed: 1.35, phase: 0.7 });
+    P(7410, 390, 230, 46);
+    P(6750, 355, 50, 50, { kind: "crate", checkpointEligible: false });
+    C(6230, 338, "coin"); C(6270, 338, "coin");
+    C(6460, 290, "star"); C(6710, 354, "coin"); C(6955, 300, "orb");
+    C(7195, 248, "star"); C(7450, 340, "coin"); C(7490, 340, "coin"); C(7530, 340, "coin");
+    E(6250, 362, "hopper", { range: 45 });
+    E(6745, 377, "tentacle", { range: 55 });
+    E(7020, 250, "floater", { range: 105, speed: 38 });
+    E(7490, 362, "walker", { range: 80 });
+    S(6350, 480, 76); S(6850, 475, 70); S(7300, 470, 100);
+
+    // 7600–9100: final approach + portal
+    P(7720, 430, 190, 50);
+    P(7985, 378, 155, 40);
+    P(8225, 330, 150, 38);
+    P(8460, 410, 225, 48);
+    P(8740, 420, 360, 65);
+    P(8560, 360, 50, 50, { kind: "crate", checkpointEligible: false });
+    C(7770, 380, "coin"); C(7810, 380, "coin"); C(8025, 328, "star");
+    C(8270, 280, "orb"); C(8310, 280, "orb");
+    C(8515, 360, "star"); C(8650, 358, "coin"); C(8690, 358, "coin");
+    E(7800, 402, "walker", { range: 55 });
+    E(8035, 350, "hopper", { range: 45 });
+    E(8310, 235, "floater", { range: 80, speed: 35 });
+    E(8500, 382, "tentacle", { range: 50 });
+    D("flag", 8790, 420);
+    D("computer", 9020, 420);
+  }
+
+  bindControls() {
+    const map = (code, down) => {
+      if (["ArrowLeft", "KeyA"].includes(code)) this.keys.left = down;
+      if (["ArrowRight", "KeyD"].includes(code)) this.keys.right = down;
+      if (["ArrowUp", "KeyW", "Space"].includes(code)) {
+        if (down && !this.keys.jump) this.keys.jumpPressed = true;
+        this.keys.jump = down;
+      }
+    };
+
+    const setTouchButtonState = (control, active) => {
+      const button = document.querySelector(`.touch-btn[data-control="${control}"]`);
+      if (button) button.classList.toggle("active", active);
+
+      if (control === "left") this.keys.left = active;
+      if (control === "right") this.keys.right = active;
+      if (control === "jump") {
+        if (active && !this.keys.jump) this.keys.jumpPressed = true;
+        this.keys.jump = active;
+      }
+    };
+
+    touchButtons.forEach(button => {
+      const control = button.dataset.control;
+      const press = e => {
+        e.preventDefault();
+        button.setPointerCapture?.(e.pointerId);
+        this.audio.ensure();
+        setTouchButtonState(control, true);
+      };
+      const release = e => {
+        e.preventDefault();
+        setTouchButtonState(control, false);
+      };
+
+      button.addEventListener("pointerdown", press, { passive: false });
+      button.addEventListener("pointerup", release, { passive: false });
+      button.addEventListener("pointercancel", release, { passive: false });
+      button.addEventListener("lostpointercapture", release, { passive: false });
+    });
+
+    window.addEventListener("keydown", e => {
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "Space"].includes(e.code)) e.preventDefault();
+      this.audio.ensure();
+      if ((e.code === "KeyP" || e.code === "Escape") && !e.repeat) this.togglePause();
+      if (e.code === "KeyR" && !e.repeat && (this.state === "failed" || this.state === "won")) this.restart();
+      map(e.code, true);
+    }, { passive: false });
+    window.addEventListener("keyup", e => map(e.code, false));
+    window.addEventListener("blur", () => {
+      this.keys.left = this.keys.right = this.keys.jump = false;
+      if (this.state === "playing") this.state = "paused";
+    });
+    canvas.addEventListener("pointerdown", e => {
+      this.audio.ensure();
+      const r = canvas.getBoundingClientRect();
+      const mx = (e.clientX - r.left) * W / r.width;
+      const my = (e.clientY - r.top) * H / r.height;
+      if (mx >= W - 68 && mx <= W - 18 && my >= 12 && my <= 58) {
+        this.togglePause();
+        return;
+      }
+      if ((this.state === "failed" || this.state === "won") && mx >= W / 2 - 122 && mx <= W / 2 + 122 && my >= 352 && my <= 398) {
+        this.restart();
+      }
+    });
+  }
+
+  togglePause() {
+    if (this.state === "playing") this.state = "paused";
+    else if (this.state === "paused") this.state = "playing";
+  }
+
+  activateCrate(p) {
+    p.activated = true;
+    this.audio.play("box");
+    const count = 3;
+    for (let i = 0; i < count; i++) {
+      const c = new Collectible(p.x + 10 + i * 15, p.y - 25 - (i % 2) * 10, i === 1 ? "star" : "coin");
+      this.collectibles.push(c);
+    }
+    for (let i = 0; i < 8; i++) this.particles.push(new Particle(p.x + p.w / 2, p.y + 5, {
+      color: "#ffd45c", size: 3, life: 0.45, gravity: 170,
+      vx: (Math.random() - 0.5) * 120, vy: -80 - Math.random() * 90
+    }));
+  }
+
+  loseLife(respawn = true) {
+    if (this.state !== "playing") return;
+    this.hearts--;
+    this.audio.play("hurt");
+    this.camera.shake = 0.35;
+    this.flash = 0.18;
+    if (this.hearts <= 0) { this.fail(); return; }
+    if (respawn) {
+      this.player.x = this.checkpoint.x;
+      this.player.y = this.checkpoint.y;
+      this.player.vx = 0; this.player.vy = 0;
+      this.player.invuln = 1.2;
+      this.player.state = "idle";
+      this.camera.x = clamp(this.player.x - 180, 0, this.worldWidth - W);
+      this.message = { text: "TENTE NOVAMENTE!", timer: 1.25 };
+    }
+  }
+
+  fail() {
+    this.state = "failed";
+    this.player.vx = 0;
+    this.player.vy = 0;
+  }
+
+  win() {
+    if (this.state === "won") return;
+    this.state = "won";
+    this.score += 1000;
+    this.flash = 0.65;
+  }
+
+  restart() {
+    window.location.reload();
+  }
+
+  update(dt) {
+    dt = Math.min(dt, 1 / 30);
+    if (this.flash > 0) this.flash = Math.max(0, this.flash - dt);
+    if (this.state !== "playing") return;
+    this.time += dt;
+    if (this.message.timer > 0) this.message.timer -= dt;
+
+    for (const p of this.platforms) p.update(this.time);
+    for (const c of this.collectibles) c.update(dt);
+    for (const e of this.enemies) e.update(dt, this);
+    this.portal.update(dt, this);
+    this.player.update(dt, this);
+
+    // Só conclui a fase depois que o último fragmento azul já foi absorvido.
+    if (this.player.state === "portal" && this.player.portalTimer > 3.02) this.win();
+
+    this.camera.update(this.player, dt);
+    for (const p of this.particles) p.update(dt);
+    this.particles = this.particles.filter(p => p.life > 0);
+    this.enemies = this.enemies.filter(e => !e.dead || e.deathTimer > 0);
+  }
+
+  drawBackground(cameraX) {
+    // Deep space gradient.
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#030524");
+    g.addColorStop(0.48, "#100644");
+    g.addColorStop(1, "#09011c");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // Nebula clouds.
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    for (const n of this.nebulae) {
+      const x = n.x - cameraX * n.layer;
+      if (x + n.sx < -100 || x - n.sx > W + 100) continue;
+      for (let i = 0; i < 7; i++) {
+        const xx = x + Math.sin(i * 2.2) * n.sx * 0.45;
+        const yy = n.y + Math.cos(i * 1.4) * n.sy * 0.7;
+        const rg = ctx.createRadialGradient(xx, yy, 5, xx, yy, n.sx * 0.33);
+        rg.addColorStop(0, n.hue);
+        rg.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = rg;
+        ctx.fillRect(xx - n.sx * .35, yy - n.sx * .35, n.sx * .7, n.sx * .7);
+      }
+    }
+    ctx.restore();
+
+    // Stars.
+    for (const s of this.stars) {
+      const x = s.x - cameraX * s.layer;
+      if (x < -4 || x > W + 4) continue;
+      const tw = 0.5 + 0.5 * Math.sin(this.time * 3 + s.tw);
+      ctx.globalAlpha = 0.5 + tw * 0.5;
+      ctx.fillStyle = s.tint;
+      ctx.fillRect(Math.round(x), Math.round(s.y), s.size, s.size);
+      if (s.size >= 3) {
+        ctx.fillRect(Math.round(x - 2), Math.round(s.y + 1), s.size + 4, 1);
+        ctx.fillRect(Math.round(x + 1), Math.round(s.y - 2), 1, s.size + 4);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    // Planets.
+    for (const p of this.planets) {
+      const x = p.x - cameraX * p.layer;
+      if (x + p.r * 2 < 0 || x - p.r * 2 > W) continue;
+      if (p.kind === "saturn") this.drawSaturn(x, p.y, p.r);
+      else if (p.kind === "earth") this.drawEarth(x, p.y, p.r);
+      else if (p.kind === "red") this.drawPlanet(x, p.y, p.r, "#cb3d20", "#ff6e24", "#7c1723");
+      else this.drawPlanet(x, p.y, p.r, "#6736b8", "#ad50d4", "#351b7f");
+    }
+
+    // Asteroids.
+    for (const a of this.asteroids) {
+      const x = a.x - cameraX * a.layer;
+      if (x < -30 || x > W + 30) continue;
+      this.drawAsteroid(x, a.y, a.r, a.rot);
+    }
+  }
+
+  drawPlanet(x, y, r, c1, c2, c3) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+    ctx.fillStyle = c1; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+    ctx.fillStyle = c2;
+    ctx.fillRect(x - r * .7, y - r * .45, r * .9, r * .18);
+    ctx.fillRect(x - r * .2, y + r * .1, r, r * .22);
+    ctx.fillStyle = c3;
+    ctx.fillRect(x - r, y + r * .48, r * 2, r * .22);
+    ctx.fillRect(x + r * .2, y - r * .78, r * .45, r * .2);
+    ctx.restore();
+    ctx.strokeStyle = "rgba(255,255,255,.22)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.stroke();
+  }
+
+  drawSaturn(x, y, r) {
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(0.22);
+    ctx.strokeStyle = "#f5a221"; ctx.lineWidth = 10;
+    ctx.beginPath(); ctx.ellipse(0, 0, r * 1.55, r * .52, 0, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = "#7e2b82"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.ellipse(0, 0, r * 1.55, r * .52, 0, 0, TAU); ctx.stroke();
+    ctx.rotate(-0.22);
+    this.drawPlanet(0, 0, r, "#742a9a", "#bb3ab5", "#43166f");
+    ctx.restore();
+  }
+
+  drawEarth(x, y, r) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.clip();
+    ctx.fillStyle = "#1678c9"; ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+    ctx.fillStyle = "#29b7e8"; ctx.fillRect(x - r, y - r * .25, 2 * r, r * .18);
+    ctx.fillStyle = "#58a443";
+    ctx.fillRect(x - r * .55, y - r * .45, r * .55, r * .35);
+    ctx.fillRect(x - r * .05, y - r * .1, r * .62, r * .25);
+    ctx.fillRect(x + r * .22, y + r * .17, r * .35, r * .38);
+    ctx.fillStyle = "#a5d65b";
+    ctx.fillRect(x - r * .48, y - r * .38, r * .26, r * .12);
+    ctx.fillStyle = "rgba(255,255,255,.45)";
+    ctx.fillRect(x - r * .72, y - r * .63, r * .55, r * .08);
+    ctx.fillRect(x + r * .05, y + r * .45, r * .6, r * .08);
+    ctx.restore();
+    ctx.strokeStyle = "rgba(100,220,255,.35)"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, r + 2, 0, TAU); ctx.stroke();
+  }
+
+  drawAsteroid(x, y, r, rot) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.fillStyle = "#5f4a61";
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = i * TAU / 8;
+      const rr = r * (i % 2 ? .8 : 1.1);
+      const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
+      if (!i) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#2e263c";
+    ctx.beginPath(); ctx.arc(-r * .25, -r * .15, r * .25, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(r * .35, r * .25, r * .18, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+
+  drawSpikes() {
+    for (const s of this.spikes) {
+      const x = Math.round(s.x - this.camera.x), y = Math.round(s.y - this.camera.y);
+      if (x + s.w < 0 || x > W) continue;
+      const count = Math.max(2, Math.floor(s.w / 14));
+      const sw = s.w / count;
+      for (let i = 0; i < count; i++) {
+        ctx.beginPath(); ctx.moveTo(x + i * sw, y + s.h); ctx.lineTo(x + i * sw + sw / 2, y); ctx.lineTo(x + (i + 1) * sw, y + s.h); ctx.closePath();
+        ctx.fillStyle = "#ced6e3"; ctx.fill();
+        ctx.fillStyle = "#728096"; ctx.fillRect(x + i * sw + sw * .18, y + s.h - 5, sw * .64, 5);
+      }
+    }
+  }
+
+  drawDecorations() {
+    for (const d of this.decorations) {
+      const x = Math.round(d.x - this.camera.x), y = Math.round(d.y - this.camera.y);
+      if (x < -120 || x > W + 120) continue;
+      if (d.type === "sign") {
+        ctx.fillStyle = "#5a4027"; ctx.fillRect(x + 8, y - 60, 5, 60); ctx.fillRect(x + 80, y - 60, 5, 60);
+        ctx.fillStyle = "#24314c"; ctx.fillRect(x, y - 76, 94, 46);
+        ctx.strokeStyle = "#7d91ad"; ctx.lineWidth = 3; ctx.strokeRect(x + 2, y - 74, 90, 42);
+        pixelText(d.text1, x + 47, y - 62, 10, "center", "#65e8ff", "#0a1531", 2);
+        pixelText(d.text2, x + 47, y - 48, 10, "center", "#ffe24a", "#0a1531", 2);
+        ctx.fillStyle = "#4be4ff"; ctx.fillRect(x + 63, y - 40, 17, 3); ctx.fillRect(x + 76, y - 43, 4, 9);
+      }
+      if (d.type === "beacon") {
+        ctx.fillStyle = "#28334a"; ctx.fillRect(x, y - 30, 38, 30);
+        ctx.fillStyle = "#697a95"; ctx.fillRect(x + 4, y - 27, 30, 4);
+        ctx.fillStyle = "#18cfff"; ctx.fillRect(x + 10, y - 22, 18, 14);
+        ctx.fillStyle = "#9fffff"; ctx.fillRect(x + 15, y - 19, 8, 8);
+        ctx.fillStyle = "#ff7b16"; ctx.fillRect(x + 17, y - 38, 4, 10); ctx.fillRect(x + 15, y - 40, 8, 4);
+      }
+      if (d.type === "computer") {
+        ctx.fillStyle = "#4f5a70"; ctx.fillRect(x, y - 34, 54, 34);
+        ctx.fillStyle = "#9eacc0"; ctx.fillRect(x + 4, y - 30, 46, 4);
+        ctx.fillStyle = "#101b32"; ctx.fillRect(x + 9, y - 25, 35, 17);
+        ctx.fillStyle = "#28ddff";
+        const blink = Math.sin(this.time * 4) > 0;
+        ctx.fillRect(x + 16, y - 20, 4, 4); ctx.fillRect(x + 33, y - 20, 4, 4);
+        if (blink) ctx.fillRect(x + 22, y - 14, 10, 2);
+      }
+      if (d.type === "antenna") {
+        ctx.fillStyle = "#aa7a37"; ctx.fillRect(x + 15, y - 72, 5, 72);
+        ctx.fillStyle = "#ffb51c"; ctx.fillRect(x + 13, y - 77, 9, 8);
+        ctx.fillStyle = "#1e73bc"; ctx.fillRect(x + 20, y - 66, 40, 28);
+        ctx.fillStyle = "#58b9ff"; ctx.fillRect(x + 20, y - 66, 40, 5);
+        ctx.fillStyle = "#ffe23c"; ctx.fillRect(x + 38, y - 61, 4, 16); ctx.fillRect(x + 32, y - 55, 16, 4);
+      }
+      if (d.type === "flag") {
+        ctx.fillStyle = "#b27a2a"; ctx.fillRect(x, y - 80, 5, 80);
+        ctx.fillStyle = "#25a6df"; ctx.fillRect(x + 5, y - 74, 48, 28);
+        ctx.fillStyle = "#ffe23d"; ctx.fillRect(x + 25, y - 67, 4, 15); ctx.fillRect(x + 19, y - 61, 16, 4);
+      }
+      if (d.type === "rocket") {
+        ctx.fillStyle = "#8898ad"; ctx.fillRect(x + 14, y - 88, 34, 88);
+        ctx.fillStyle = "#eef3f5"; ctx.fillRect(x + 18, y - 82, 26, 68);
+        ctx.fillStyle = "#e23b2c";
+        ctx.beginPath(); ctx.moveTo(x + 18, y - 82); ctx.lineTo(x + 31, y - 105); ctx.lineTo(x + 44, y - 82); ctx.closePath(); ctx.fill();
+        ctx.fillRect(x + 11, y - 32, 10, 28); ctx.fillRect(x + 42, y - 32, 10, 28);
+        ctx.fillStyle = "#2fd8ff"; ctx.beginPath(); ctx.arc(x + 31, y - 60, 9, 0, TAU); ctx.fill();
+        ctx.fillStyle = "#0e4c8c"; ctx.beginPath(); ctx.arc(x + 31, y - 60, 5, 0, TAU); ctx.fill();
+        const flame = 8 + Math.round(Math.sin(this.time * 10) * 4);
+        ctx.fillStyle = "#ffcc22"; ctx.fillRect(x + 25, y - 4, 12, flame);
+        ctx.fillStyle = "#45e7ff"; ctx.fillRect(x + 28, y - 2, 6, Math.max(3, flame - 3));
+      }
+    }
+  }
+
+  drawHUD() {
+    ctx.save();
+    // center title
+    roundedRect(W / 2 - 190, 9, 380, 47, 7); ctx.fillStyle = "rgba(5,27,72,.92)"; ctx.fill();
+    ctx.strokeStyle = "#179edf"; ctx.lineWidth = 2; ctx.stroke();
+    pixelText("★ FASE 1 – MISSÃO ESPACIAL ★", W / 2, 33, 17, "center", "#ffd94a", "#07152b", 3);
+
+    // portrait
+    roundedRect(12, 12, 58, 58, 5); ctx.fillStyle = "#0b4d84"; ctx.fill(); ctx.strokeStyle = "#50dcff"; ctx.lineWidth = 2; ctx.stroke();
+    // mini head portrait
+    ctx.fillStyle = "#2a150f"; ctx.fillRect(25, 18, 32, 14); ctx.fillRect(20, 22, 40, 10);
+    ctx.fillStyle = "#b96c42"; ctx.fillRect(25, 30, 30, 24);
+    ctx.fillStyle = "#0d0d14"; ctx.fillRect(31, 38, 3, 4); ctx.fillRect(47, 38, 3, 4);
+    ctx.fillStyle = "white"; ctx.fillRect(32, 38, 1, 1); ctx.fillRect(48, 38, 1, 1);
+    ctx.fillStyle = "#5a261f"; ctx.fillRect(36, 47, 8, 2);
+
+    // hearts
+    for (let i = 0; i < 3; i++) this.drawHeart(82 + i * 32, 18, i < this.hearts);
+    pixelText(`★ ${String(this.starsCollected).padStart(2, "0")}`, 84, 58, 14, "left", "#ffe14a", "#061329", 3);
+
+    // score
+    pixelText("PONTOS", W - 150, 19, 12, "center", "#ffffff", "#090b21", 3);
+    pixelText(String(this.score).padStart(6, "0"), W - 150, 40, 20, "center", "#ffffff", "#090b21", 4);
+
+    // pause button
+    roundedRect(W - 68, 12, 50, 46, 7); ctx.fillStyle = "#1479c7"; ctx.fill(); ctx.strokeStyle = "#50e4ff"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#e8fbff"; ctx.fillRect(W - 54, 22, 7, 24); ctx.fillRect(W - 39, 22, 7, 24);
+    ctx.restore();
+  }
+
+  drawHeart(x, y, full) {
+    ctx.save();
+    ctx.fillStyle = full ? "#ff324f" : "#332b46";
+    ctx.fillRect(x + 4, y, 8, 7); ctx.fillRect(x + 15, y, 8, 7);
+    ctx.fillRect(x, y + 5, 27, 9); ctx.fillRect(x + 4, y + 14, 19, 7); ctx.fillRect(x + 8, y + 21, 11, 5);
+    if (full) { ctx.fillStyle = "#ff8b98"; ctx.fillRect(x + 5, y + 3, 5, 4); }
+    ctx.restore();
+  }
+
+  drawOverlay() {
+    if (this.message.timer > 0 && this.state === "playing") {
+      const a = clamp(this.message.timer, 0, 1);
+      ctx.save(); ctx.globalAlpha = a;
+      roundedRect(W / 2 - 140, H - 100, 280, 38, 6); ctx.fillStyle = "rgba(3,24,60,.82)"; ctx.fill();
+      pixelText(this.message.text, W / 2, H - 81, 15, "center", "#6feaff", "#07152b", 3);
+      ctx.restore();
+    }
+
+    if (this.state === "paused") {
+      ctx.fillStyle = "rgba(2,3,18,.72)"; ctx.fillRect(0, 0, W, H);
+      roundedRect(W / 2 - 190, H / 2 - 85, 380, 170, 10); ctx.fillStyle = "#101b45"; ctx.fill(); ctx.strokeStyle = "#33cfff"; ctx.lineWidth = 3; ctx.stroke();
+      pixelText("JOGO PAUSADO", W / 2, H / 2 - 25, 28, "center", "#ffe04e", "#071329", 5);
+      pixelText("Pressione P ou ESC para continuar", W / 2, H / 2 + 25, 13, "center", "#d4f7ff", "#071329", 3);
+    }
+
+    if (this.state === "failed" || this.state === "won") {
+      ctx.fillStyle = this.state === "won" ? "rgba(0,27,72,.76)" : "rgba(35,0,22,.78)";
+      ctx.fillRect(0, 0, W, H);
+      roundedRect(W / 2 - 255, 145, 510, 270, 12);
+      ctx.fillStyle = this.state === "won" ? "#0a2d58" : "#3d112c"; ctx.fill();
+      ctx.strokeStyle = this.state === "won" ? "#40e7ff" : "#ff5f79"; ctx.lineWidth = 4; ctx.stroke();
+      if (this.state === "won") {
+        pixelText("★ MISSÃO CONCLUÍDA! ★", W / 2, 205, 28, "center", "#ffe052", "#06152e", 5);
+        pixelText("Você chegou ao portal espacial!", W / 2, 253, 15, "center", "#d6fbff", "#06152e", 3);
+        pixelText(`PONTUAÇÃO: ${String(this.score).padStart(6, "0")}`, W / 2, 292, 17, "center", "#65ecff", "#06152e", 3);
+        pixelText(`ESTRELAS: ${this.starsCollected}`, W / 2, 320, 14, "center", "#ffe44f", "#06152e", 3);
+      } else {
+        pixelText("MISSÃO FRACASSADA", W / 2, 212, 29, "center", "#ff627b", "#2b0718", 5);
+        pixelText("Os três corações acabaram.", W / 2, 260, 15, "center", "#f9dce4", "#2b0718", 3);
+        pixelText(`PONTOS: ${String(this.score).padStart(6, "0")}`, W / 2, 300, 16, "center", "#ffd84b", "#2b0718", 3);
+      }
+      roundedRect(W / 2 - 122, 352, 244, 46, 7); ctx.fillStyle = this.state === "won" ? "#147ac6" : "#b82f4d"; ctx.fill();
+      ctx.strokeStyle = "#e9fbff"; ctx.lineWidth = 2; ctx.stroke();
+      pixelText(this.state === "won" ? "JOGAR NOVAMENTE" : "TENTAR NOVAMENTE", W / 2, 375, 16, "center", "#ffffff", "#08142b", 3);
+    }
+
+    if (this.flash > 0) {
+      ctx.save();
+      ctx.globalAlpha = clamp(this.flash * 1.4, 0, .7);
+      ctx.fillStyle = this.state === "won" ? "#54ddff" : "#ff5274";
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+  }
+
+  draw() {
+    const sx = this.camera.offsetX(), sy = this.camera.offsetY();
+    ctx.save();
+    ctx.translate(sx, sy);
+    this.drawBackground(this.camera.x);
+
+    // distant silhouette fragments for depth
+    ctx.globalAlpha = 0.18;
+    for (let x = 200; x < this.worldWidth; x += 520) {
+      const px = x - this.camera.x * .55;
+      if (px > -180 && px < W + 180) {
+        ctx.fillStyle = "#3f176f";
+        ctx.fillRect(px, 450 + Math.sin(x) * 10, 150, 18);
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    for (const p of this.platforms) p.draw(this.camera);
+    this.drawSpikes();
+    this.drawDecorations();
+    for (const c of this.collectibles) c.draw(this.camera);
+    for (const e of this.enemies) e.draw(this.camera, this);
+    this.portal.draw(this.camera);
+    for (const p of this.particles) p.draw(this.camera);
+    this.player.draw(this.camera);
+    if (this.player.state === "portal") this.portal.drawForeground(this.camera);
+    ctx.restore();
+
+    this.drawHUD();
+    this.drawOverlay();
+  }
+}
+
+const game = new Game();
+let last = performance.now();
+function loop(now) {
+  const dt = (now - last) / 1000;
+  last = now;
+  game.update(dt);
+  game.draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+  </script>
+</body>
+</html>
